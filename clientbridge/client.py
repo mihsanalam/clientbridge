@@ -1,5 +1,6 @@
 """HTTP client for the OpenWeatherMap current weather endpoint."""
 
+import time
 from dataclasses import dataclass
 from typing import Optional
 
@@ -8,6 +9,7 @@ import requests
 from .exceptions import (
     APIError,
     AuthenticationError,
+    ClientBridgeError,
     NetworkError,
     RateLimitError,
     ServerError,
@@ -15,6 +17,8 @@ from .exceptions import (
 
 DEFAULT_BASE_URL = "https://api.openweathermap.org/data/2.5/weather"
 DEFAULT_TIMEOUT = 10
+DEFAULT_RETRIES = 3
+DEFAULT_BACKOFF_FACTOR = 0.5
 VALID_UNITS = ("metric", "imperial", "standard")
 
 
@@ -39,13 +43,19 @@ class WeatherClient:
         api_key: str,
         base_url: str = DEFAULT_BASE_URL,
         timeout: float = DEFAULT_TIMEOUT,
+        retries: int = DEFAULT_RETRIES,
+        backoff_factor: float = DEFAULT_BACKOFF_FACTOR,
         session: Optional[requests.Session] = None,
     ) -> None:
         if not api_key:
             raise ValueError("api_key must not be empty")
+        if retries < 0:
+            raise ValueError("retries must not be negative")
         self.api_key = api_key
         self.base_url = base_url
         self.timeout = timeout
+        self.retries = retries
+        self.backoff_factor = backoff_factor
         self.session = session if session is not None else requests.Session()
 
     def get_weather(self, city: str, units: str = "metric") -> Weather:
@@ -60,18 +70,23 @@ class WeatherClient:
         return self._parse(payload, units)
 
     def _get(self, params: dict[str, str]) -> dict:
-        try:
-            response = self.session.get(
-                self.base_url, params=params, timeout=self.timeout
-            )
-        except requests.RequestException as exc:
-            raise NetworkError(f"Request to weather API failed: {exc}") from exc
+        last_error: ClientBridgeError
+        for attempt in range(self.retries + 1):
+            try:
+                response = self.session.get(
+                    self.base_url, params=params, timeout=self.timeout
+                )
+                self._check_response(response)
+                return response.json()
+            except (NetworkError, RateLimitError, ServerError) as exc:
+                last_error = exc
+            except ValueError as exc:
+                raise APIError("Weather API returned invalid JSON") from exc
 
-        self._check_response(response)
-        try:
-            return response.json()
-        except ValueError as exc:
-            raise APIError("Weather API returned invalid JSON") from exc
+            if attempt < self.retries:
+                time.sleep(self.backoff_factor * (2**attempt))
+
+        raise last_error
 
     @staticmethod
     def _check_response(response: requests.Response) -> None:
