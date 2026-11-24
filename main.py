@@ -28,6 +28,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: list[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
     load_dotenv()
     api_key = os.environ.get("OPENWEATHER_API_KEY")
     if not api_key:
@@ -37,7 +38,6 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 1
 
-    args = build_parser().parse_args(argv)
     client = WeatherClient(api_key)
     try:
         weather = client.get_weather(args.city, units=args.units)
