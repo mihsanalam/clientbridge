@@ -78,6 +78,8 @@ class WeatherClient:
                 )
                 self._check_response(response)
                 return response.json()
+            except requests.RequestException as exc:
+                last_error = NetworkError(f"Request to weather API failed: {exc}")
             except (NetworkError, RateLimitError, ServerError) as exc:
                 last_error = exc
             except ValueError as exc:
