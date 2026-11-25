@@ -1,23 +1,10 @@
 # clientbridge
 
-A small Python client for the OpenWeatherMap current weather API, with a command line interface for quick lookups.
+A small Python wrapper around the OpenWeatherMap REST API, built as a homework exercise in making a third-party API usable and reliable.
 
-## Requirements
+## Getting a key
 
-- Python 3.10 or newer
-- An OpenWeatherMap API key
-
-## Installation
-
-Install the dependencies from the project directory:
-
-```bash
-python -m pip install -r requirements.txt
-```
-
-## Configuration
-
-Copy `.env.example` to `.env` and set your API key:
+Create a free account at openweathermap.org/api and generate an API key. Copy `.env.example` to `.env` and put the key there:
 
 ```bash
 cp .env.example .env
@@ -27,37 +14,39 @@ cp .env.example .env
 OPENWEATHER_API_KEY=your_api_key_here
 ```
 
-The key can also be provided directly in the environment. The `.env` file is ignored by Git so credentials stay local.
+`.env` is gitignored, so the key is never committed.
 
-## Command line usage
+## Install
+
+```bash
+python -m pip install -r requirements.txt
+```
+
+## Run the CLI
 
 ```bash
 python main.py London
-python main.py "New York" --units imperial
+python main.py "New York" --units imperial --days 2
 ```
 
-The command prints the current temperature, feels-like value, condition description, and humidity. `--units` accepts `metric` (the default), `imperial`, and `standard`.
+The CLI prints current conditions followed by a daily forecast. It calls both client methods end to end.
 
-## Library usage
+## Use the client directly
 
 ```python
-from clientbridge import WeatherClient
+from clientbridge import ApiClient
 
-client = WeatherClient("your_api_key_here")
-weather = client.get_weather("London")
-print(weather.temperature, weather.description)
+client = ApiClient("your_api_key_here")
+weather = client.get_current_weather("London")
+forecast = client.get_forecast("London", days=3)
 ```
 
-`WeatherClient` also accepts `base_url`, `timeout`, `retries`, `backoff_factor`, and `session`. Retries use exponential backoff and apply to network failures, rate limits, and server errors. Authentication errors and other client errors fail immediately.
-
-## Errors
-
-Every failure raised by the package derives from `ClientBridgeError`. `NetworkError` covers connection problems. `APIError` covers unsuccessful or unusable responses and carries a `status_code` attribute; `AuthenticationError`, `RateLimitError`, and `ServerError` are its more specific subclasses. Invalid arguments raise `ValueError`.
+Both methods return small typed objects rather than raw HTTP responses. Network errors, HTTP errors, and invalid JSON raise `ApiClientError` with a readable message. Timeouts, rate limits, and 5xx responses are retried twice with a short delay.
 
 ## Tests
 
 ```bash
-python -m unittest discover -s tests
+python -m unittest discover
 ```
 
-The tests use mocked HTTP responses, so they need neither an API key nor a network connection.
+The tests use mocked HTTP responses, so no key or network connection is needed. They include failure cases for a bad city, a bad key, and a timeout.

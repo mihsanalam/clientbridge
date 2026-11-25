@@ -1,42 +1,58 @@
+import io
 import unittest
+from contextlib import redirect_stderr
 from unittest.mock import Mock, patch
 
 import requests
 
-from clientbridge.client import DEFAULT_BASE_URL, DEFAULT_TIMEOUT, WeatherClient
-from clientbridge.exceptions import (
-    APIError,
-    AuthenticationError,
-    NetworkError,
-    ServerError,
-)
+from clientbridge import ApiClient, ApiClientError
+from main import main
 
-SAMPLE_WEATHER = {
-    "weather": [{"description": "light rain"}],
-    "main": {"temp": 12.3, "feels_like": 11.1, "humidity": 72},
+CURRENT_WEATHER = {
     "name": "London",
     "sys": {"country": "GB"},
+    "main": {"temp": 12.3, "feels_like": 11.1, "humidity": 72},
+    "weather": [{"description": "light rain"}],
+}
+
+FORECAST = {
+    "list": [
+        {
+            "dt_txt": "2026-11-25 00:00:00",
+            "main": {"temp": 10.0, "humidity": 70},
+            "weather": [{"description": "clouds"}],
+        },
+        {
+            "dt_txt": "2026-11-25 12:00:00",
+            "main": {"temp": 14.0, "humidity": 60},
+            "weather": [{"description": "clear sky"}],
+        },
+        {
+            "dt_txt": "2026-11-26 12:00:00",
+            "main": {"temp": 15.0, "humidity": 65},
+            "weather": [{"description": "sunny"}],
+        },
+    ]
 }
 
 
-def make_response(status_code=200, payload=None, reason=""):
+def make_response(status_code=200, payload=None):
     response = Mock()
     response.status_code = status_code
     response.ok = 200 <= status_code < 400
-    response.reason = reason
     response.json.return_value = {} if payload is None else payload
     return response
 
 
-class WeatherClientTests(unittest.TestCase):
+class ApiClientTests(unittest.TestCase):
     def setUp(self):
         self.session = Mock()
-        self.client = WeatherClient("test-key", session=self.session)
+        self.client = ApiClient("test-key", session=self.session)
 
-    def test_get_weather_parses_response(self):
-        self.session.get.return_value = make_response(payload=SAMPLE_WEATHER)
+    def test_get_current_weather_returns_clean_data(self):
+        self.session.get.return_value = make_response(payload=CURRENT_WEATHER)
 
-        weather = self.client.get_weather("London")
+        weather = self.client.get_current_weather("London")
 
         self.assertEqual(weather.city, "London")
         self.assertEqual(weather.country, "GB")
@@ -45,110 +61,90 @@ class WeatherClientTests(unittest.TestCase):
         self.assertEqual(weather.humidity, 72)
         self.assertEqual(weather.description, "light rain")
         self.assertEqual(weather.units, "metric")
-        self.session.get.assert_called_once_with(
-            DEFAULT_BASE_URL,
-            params={"q": "London", "appid": "test-key", "units": "metric"},
-            timeout=DEFAULT_TIMEOUT,
-        )
 
-    def test_get_weather_passes_units(self):
-        self.session.get.return_value = make_response(payload=SAMPLE_WEATHER)
+    def test_get_forecast_returns_one_entry_per_day(self):
+        self.session.get.return_value = make_response(payload=FORECAST)
 
-        weather = self.client.get_weather("London", units="imperial")
+        days = self.client.get_forecast("London", days=2)
 
-        self.assertEqual(weather.units, "imperial")
-        self.assertEqual(
-            self.session.get.call_args.kwargs["params"]["units"], "imperial"
-        )
+        self.assertEqual([day.date for day in days], ["2026-11-25", "2026-11-26"])
+        self.assertEqual(days[0].temperature, 10.0)
+        self.assertEqual(days[0].description, "clouds")
 
-    def test_rejects_invalid_units(self):
-        with self.assertRaises(ValueError):
-            self.client.get_weather("London", units="kelvin")
-        self.session.get.assert_not_called()
+    def test_bad_city_raises_api_client_error(self):
+        self.session.get.return_value = make_response(404, {"message": "city not found"})
 
-    def test_rejects_empty_city(self):
-        with self.assertRaises(ValueError):
-            self.client.get_weather("   ")
-        self.session.get.assert_not_called()
+        with self.assertRaises(ApiClientError) as caught:
+            self.client.get_current_weather("Nowhere")
 
-    def test_requires_api_key(self):
-        with self.assertRaises(ValueError):
-            WeatherClient("")
+        self.assertIn("city not found", str(caught.exception))
+        self.assertEqual(caught.exception.status_code, 404)
+        self.session.get.assert_called_once()
+
+    def test_bad_api_key_raises_api_client_error(self):
+        self.session.get.return_value = make_response(401, {"message": "Invalid API key"})
+
+        with self.assertRaises(ApiClientError) as caught:
+            self.client.get_current_weather("London")
+
+        self.assertIn("Invalid API key", str(caught.exception))
 
     @patch("clientbridge.client.time.sleep")
-    def test_rate_limit_is_retried(self, sleep):
+    def test_timeout_is_retried_then_raises_api_client_error(self, sleep):
+        self.session.get.side_effect = requests.Timeout("timed out")
+
+        with self.assertRaises(ApiClientError) as caught:
+            self.client.get_current_weather("London")
+
+        self.assertIn("Could not reach", str(caught.exception))
+        self.assertEqual(self.session.get.call_count, 3)
+        self.assertEqual(sleep.call_count, 2)
+
+    @patch("clientbridge.client.time.sleep")
+    def test_server_error_is_retried(self, sleep):
         self.session.get.side_effect = [
-            make_response(429, {"message": "rate limited"}),
-            make_response(payload=SAMPLE_WEATHER),
+            make_response(500, {"message": "server error"}),
+            make_response(payload=CURRENT_WEATHER),
         ]
 
-        weather = self.client.get_weather("London")
+        weather = self.client.get_current_weather("London")
 
         self.assertEqual(weather.city, "London")
         self.assertEqual(self.session.get.call_count, 2)
         sleep.assert_called_once()
 
-    def test_authentication_error_is_not_retried(self):
-        self.session.get.return_value = make_response(401, {"message": "Invalid key"})
-
-        with self.assertRaises(AuthenticationError):
-            self.client.get_weather("London")
-
-        self.session.get.assert_called_once()
-
-    def test_client_error_is_not_retried(self):
-        self.session.get.return_value = make_response(404, {"message": "not found"})
-
-        with self.assertRaises(APIError):
-            self.client.get_weather("Nowhere")
-
-        self.session.get.assert_called_once()
-
-    @patch("clientbridge.client.time.sleep")
-    def test_network_error_is_retried_then_raised(self, sleep):
-        self.session.get.side_effect = requests.ConnectionError("offline")
-
-        with self.assertRaises(NetworkError):
-            self.client.get_weather("London")
-
-        self.assertEqual(self.session.get.call_count, self.client.retries + 1)
-        self.assertEqual(sleep.call_count, self.client.retries)
-
-    @patch("clientbridge.client.time.sleep")
-    def test_server_error_exhausts_retries(self, sleep):
-        self.session.get.return_value = make_response(500, {"message": "boom"})
-
-        with self.assertRaises(ServerError) as caught:
-            self.client.get_weather("London")
-
-        self.assertEqual(caught.exception.status_code, 500)
-        self.assertEqual(self.session.get.call_count, self.client.retries + 1)
-        self.assertEqual(sleep.call_count, self.client.retries)
-
-    def test_zero_retries(self):
-        client = WeatherClient("test-key", retries=0, session=self.session)
-        self.session.get.side_effect = requests.ConnectionError("offline")
-
-        with self.assertRaises(NetworkError):
-            client.get_weather("London")
-
-        self.session.get.assert_called_once()
-
-    def test_invalid_json_raises_api_error(self):
+    def test_invalid_json_raises_api_client_error(self):
         response = make_response()
         response.json.side_effect = ValueError("bad json")
         self.session.get.return_value = response
 
-        with self.assertRaises(APIError):
-            self.client.get_weather("London")
+        with self.assertRaises(ApiClientError):
+            self.client.get_current_weather("London")
 
-        self.session.get.assert_called_once()
+    def test_invalid_units_raises_api_client_error(self):
+        with self.assertRaises(ApiClientError):
+            self.client.get_current_weather("London", units="kelvin")
+        self.session.get.assert_not_called()
 
-    def test_unexpected_payload_raises_api_error(self):
-        self.session.get.return_value = make_response(payload={"unexpected": True})
+    def test_empty_api_key_is_rejected(self):
+        with self.assertRaises(ApiClientError):
+            ApiClient("")
 
-        with self.assertRaises(APIError):
-            self.client.get_weather("London")
+
+class CliTests(unittest.TestCase):
+    @patch.dict("os.environ", {"OPENWEATHER_API_KEY": "test-key"})
+    @patch("main.ApiClient")
+    def test_failure_prints_message_without_traceback(self, client_class):
+        client_class.return_value.get_current_weather.side_effect = ApiClientError(
+            "city not found"
+        )
+
+        stderr = io.StringIO()
+        with redirect_stderr(stderr):
+            exit_code = main(["Nowhere"])
+
+        self.assertEqual(exit_code, 1)
+        self.assertIn("Error: city not found", stderr.getvalue())
 
 
 if __name__ == "__main__":
