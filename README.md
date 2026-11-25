@@ -1,6 +1,6 @@
 # clientbridge
 
-A small Python wrapper around the OpenWeatherMap REST API, built as a homework exercise in making a third-party API usable and reliable.
+A small Python wrapper around the OpenWeatherMap REST API.
 
 ## Getting a key
 
