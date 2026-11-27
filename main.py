@@ -49,13 +49,13 @@ def main(argv: list[str] | None = None) -> int:
 
     symbol = UNIT_SYMBOLS[weather.units]
     print(
-        f"{weather.city}, {weather.country}: {weather.temperature:.1f}°{symbol}, "
-        f"feels like {weather.feels_like:.1f}°{symbol}. "
+        f"{weather.city}, {weather.country}: {weather.temperature:.1f} {symbol}, "
+        f"feels like {weather.feels_like:.1f} {symbol}. "
         f"{weather.description.capitalize()}. Humidity {weather.humidity}%."
     )
     print("Forecast:")
     for day in forecast:
-        print(f"  {day.date}: {day.temperature:.1f}°{symbol}, {day.description}")
+        print(f"  {day.date}: {day.temperature:.1f} {symbol}, {day.description}")
     return 0
 
 

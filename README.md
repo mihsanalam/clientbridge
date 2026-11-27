@@ -1,10 +1,10 @@
 # clientbridge
 
-A small Python wrapper around the OpenWeatherMap REST API.
+A small Python wrapper around OpenWeatherMap's current weather and forecast endpoints.
 
-## Getting a key
+## Set up
 
-Create a free account at openweathermap.org/api and generate an API key. Copy `.env.example` to `.env` and put the key there:
+Get a free API key from openweathermap.org/api. Copy the example env file and add your key:
 
 ```bash
 cp .env.example .env
@@ -14,24 +14,24 @@ cp .env.example .env
 OPENWEATHER_API_KEY=your_api_key_here
 ```
 
-`.env` is gitignored, so the key is never committed.
+The `.env` file is gitignored, so the key stays on your machine.
 
-## Install
+Install the dependencies:
 
 ```bash
 python -m pip install -r requirements.txt
 ```
 
-## Run the CLI
+## Run it
 
 ```bash
 python main.py London
 python main.py "New York" --units imperial --days 2
 ```
 
-The CLI prints current conditions followed by a daily forecast. It calls both client methods end to end.
+The CLI prints current conditions and a daily forecast. It calls both client methods.
 
-## Use the client directly
+## Use it from Python
 
 ```python
 from clientbridge import ApiClient
@@ -41,12 +41,12 @@ weather = client.get_current_weather("London")
 forecast = client.get_forecast("London", days=3)
 ```
 
-Both methods return small typed objects rather than raw HTTP responses. Network errors, HTTP errors, and invalid JSON raise `ApiClientError` with a readable message. Timeouts, rate limits, and 5xx responses are retried twice with a short delay.
+Both methods return typed objects, never raw HTTP responses. Failures raise `ApiClientError` with a clear message; timeouts, rate limits, and 5xx replies are retried twice.
 
-## Tests
+## Test it
 
 ```bash
 python -m unittest discover
 ```
 
-The tests use mocked HTTP responses, so no key or network connection is needed. They include failure cases for a bad city, a bad key, and a timeout.
+Tests use mocked responses, so no key or network is needed.
